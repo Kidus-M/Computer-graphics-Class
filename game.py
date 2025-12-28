@@ -25,6 +25,7 @@ import math
 import random
 import sys
 import os
+import ctypes # For DPI Fix
 import pygame
 from pygame.locals import *
 from OpenGL.GL import *
@@ -50,13 +51,13 @@ NET_HEIGHT = 0.8
 
 # Physics Constants
 # Physics Constants
-GRAVITY = -18.0             # Gravity (m/s^2)
-DRAG_COEFF = 0.08           # Air resistance (reduced)
-MAGNUS_STRENGTH = 6.0       # Spin curve strength
-RESTITUTION = 0.85          # Bounciness of table
+GRAVITY = -14.0             # Lower gravity = floatier ball = easier to hit
+DRAG_COEFF = 0.05           # Low drag to keep it moving
+MAGNUS_STRENGTH = 6.0       
+RESTITUTION = 0.85          
 
 # Paddle
-PADDLE_WIDTH = 1.5
+PADDLE_WIDTH = 1.8          # Wider paddle for easier hits
 PADDLE_HEIGHT = 1.8
 PADDLE_Z_OFFSET = 7.0
 
@@ -181,13 +182,13 @@ class Paddle:
         self.width = PADDLE_WIDTH
         self.height = PADDLE_HEIGHT # Actually Diameter of the blade
         self.depth = 0.2
-        self.speed = 10.0
+        self.speed = 24.0 # Much faster movement for reaction
         self.color_rubber = color_rubber
         self.tilt = 0.0
         
     def move_horizontal(self, direction, dt):
         self.x += direction * self.speed * dt
-        limit = TABLE_HALF_WIDTH + 1.0
+        limit = TABLE_HALF_WIDTH + 2.0 # Allow moving slightly off table
         self.x = max(-limit, min(limit, self.x))
         # Tilt effect
         target_tilt = -direction * 15.0
@@ -249,12 +250,13 @@ class Ball:
         
         
         
+        
         # Launch params
-        speed = 19.0 # Slightly easier serve to return
+        speed = 16.0 # Even slower serve for playability
         forward = 1 if server == 1 else -1
         
-        self.vx = random.uniform(-0.8, 0.8) 
-        self.vy = random.uniform(4, 6)
+        self.vx = random.uniform(-0.5, 0.5) 
+        self.vy = random.uniform(3.5, 5) # Gentle toss
         self.vz = forward * speed * 0.6
         
         self.spin_x = 0.0 # Top/Back spin  (Magus force in Y/Z)
@@ -300,6 +302,29 @@ class Ball:
 
     def draw(self, quadric):
         self.trail.draw(quadric)
+        
+        # Guide Line (Visual Assist for user)
+        glDisable(GL_LIGHTING)
+        glLineWidth(2.0)
+        glBegin(GL_LINES)
+        # Vertical drop line to table/floor
+        glColor4f(1.0, 1.0, 1.0, 0.3)
+        glVertex3f(self.x, self.y, self.z)
+        glVertex3f(self.x, 0, self.z) 
+        glEnd()
+        
+        # Shadow on table
+        if self.y > 0:
+            glPushMatrix()
+            # Flatten to table height
+            shadow_y = TABLE_HEIGHT + 0.05 if abs(self.x)<TABLE_HALF_WIDTH and abs(self.z)<TABLE_HALF_DEPTH else -4.9
+            glTranslatef(self.x, shadow_y, self.z)
+            glScalef(1.0, 0.1, 1.0)
+            glColor4f(0.0, 0.0, 0.0, 0.4)
+            gluSphere(quadric, BALL_RADIUS, 8, 8)
+            glPopMatrix()
+        
+        glEnable(GL_LIGHTING)
         
         glPushMatrix()
         glTranslatef(self.x, self.y, self.z)
@@ -446,7 +471,13 @@ def draw_table_mesh(quadric):
 
 class Game:
     def __init__(self, w=1400, h=900):
-        os.environ['SDL_VIDEO_CENTERED'] = '1' # Center window
+        # Window & DPI Fix
+        os.environ['SDL_VIDEO_CENTERED'] = '1' 
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
+        except Exception:
+            pass # Not Windows 8.1+
+            
         pygame.init()
         pygame.display.set_mode((w, h), DOUBLEBUF | OPENGL | RESIZABLE)
         pygame.display.set_caption("3D Ping Pong Pro")
