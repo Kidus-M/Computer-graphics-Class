@@ -7,6 +7,7 @@ Features realistic 3D graphics, physics with gravity, multiple camera angles.
 Controls:
     Player 1 (Red - Back): A / D
     Player 2 (Blue - Front): Left / Right
+    SPACE: Manual serve
     C: Cycle camera angles
     P: Pause/Resume
     F: Toggle FPS counter
@@ -34,6 +35,7 @@ from pygame.locals import (
     K_RIGHT,
     K_r,
     K_c,
+    K_SPACE,
     K_p,
     K_f,
     QUIT,
@@ -166,11 +168,11 @@ class BallTrail:
         
         count = len(self.positions)
         for i, (x, y, z) in enumerate(self.positions):
-            alpha = (i + 1) / count * 0.5
+            alpha = (i + 1) / count * 0.6
             size = BALL_RADIUS * (0.5 + (i + 1) / count * 0.5)
             glPushMatrix()
             glTranslatef(x, y, z)
-            glColor4f(1.0, 0.6, 0.1, alpha)
+            glColor4f(1.0, 1.0, 0.5, alpha)
             gluSphere(quadric, size, 8, 8)
             glPopMatrix()
             
@@ -226,8 +228,8 @@ class Paddle:
         draw_unit_cube()
         glPopMatrix()
         
-        # Rubber surface (darker, almost black)
-        glColor3f(0.1, 0.1, 0.1)
+        # Rubber surface (pure black for contrast)
+        glColor3f(0.0, 0.0, 0.0)
         offset = self.depth / 2 + 0.02
         glPushMatrix()
         glTranslatef(0, 0, offset if self.z > 0 else -offset)
@@ -373,11 +375,11 @@ class Ball:
         glPushMatrix()
         glTranslatef(self.x, self.y, self.z)
         
-        # Outer glow (orange for visibility)
+        # Outer glow (bright yellow for visibility)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glColor4f(1.0, 0.5, 0.0, 0.4)
-        gluSphere(quadric, BALL_RADIUS * 1.5, 16, 16)
+        glColor4f(1.0, 1.0, 0.0, 0.5)
+        gluSphere(quadric, BALL_RADIUS * 1.6, 16, 16)
         glDisable(GL_BLEND)
         
         # Main ball (bright white)
@@ -447,8 +449,8 @@ def draw_cylinder(quadric, radius, height, slices=20):
 def draw_table(quadric):
     """Draw realistic 3D table tennis table"""
     
-    # Table surface (bright green - traditional ping pong color)
-    glColor3f(0.1, 0.6, 0.2)
+    # Table surface (bright blue - high contrast)
+    glColor3f(0.15, 0.45, 0.75)
     glPushMatrix()
     glTranslatef(0, TABLE_HEIGHT, 0)
     glScalef(TABLE_HALF_WIDTH * 2, TABLE_THICKNESS, TABLE_HALF_DEPTH * 2)
@@ -576,8 +578,8 @@ class Game:
         self.camera_names = list(CAMERA_ANGLES.keys())
         
         # Game objects
-        self.player1 = Paddle(-PADDLE_Z_OFFSET, (1.0, 0.1, 0.1))  # Bright Red
-        self.player2 = Paddle(PADDLE_Z_OFFSET, (0.1, 0.3, 1.0))   # Bright Blue
+        self.player1 = Paddle(-PADDLE_Z_OFFSET, (1.0, 0.0, 0.0))  # Pure Red
+        self.player2 = Paddle(PADDLE_Z_OFFSET, (0.0, 0.5, 1.0))   # Cyan Blue
         self.ball = Ball()
         self.particles = ParticleSystem()
         self.quadric = gluNewQuadric()
@@ -591,6 +593,7 @@ class Game:
         self.winner = None
         self.paused = False
         self.show_fps = False
+        self.waiting_for_serve = True  # New: waiting for manual serve
         
         # Timing
         self.clock = pygame.time.Clock()
@@ -602,8 +605,8 @@ class Game:
         self.font_medium = pygame.font.SysFont('Arial', 42)
         self.font_small = pygame.font.SysFont('Arial', 24)
         
-        # Start serve
-        self.serve_ball()
+        # Don't auto-serve, wait for spacebar
+        # self.serve_ball()
         
     def init_opengl(self):
         """Initialize OpenGL settings"""
@@ -612,16 +615,16 @@ class Game:
         glEnable(GL_LIGHT0)
         glEnable(GL_LIGHT1)
         
-        # Main light
-        glLightfv(GL_LIGHT0, GL_POSITION, (5.0, 10.0, 5.0, 0.0))
-        glLightfv(GL_LIGHT0, GL_AMBIENT, (0.2, 0.2, 0.2, 1.0))
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, (0.8, 0.8, 0.8, 1.0))
+        # Main light (brighter for better visibility)
+        glLightfv(GL_LIGHT0, GL_POSITION, (0.0, 15.0, 0.0, 0.0))
+        glLightfv(GL_LIGHT0, GL_AMBIENT, (0.4, 0.4, 0.4, 1.0))
+        glLightfv(GL_LIGHT0, GL_DIFFUSE, (1.0, 1.0, 1.0, 1.0))
         glLightfv(GL_LIGHT0, GL_SPECULAR, (1.0, 1.0, 1.0, 1.0))
         
-        # Secondary light
-        glLightfv(GL_LIGHT1, GL_POSITION, (-5.0, 8.0, -5.0, 0.0))
-        glLightfv(GL_LIGHT1, GL_AMBIENT, (0.1, 0.1, 0.1, 1.0))
-        glLightfv(GL_LIGHT1, GL_DIFFUSE, (0.4, 0.4, 0.4, 1.0))
+        # Secondary light (fill light)
+        glLightfv(GL_LIGHT1, GL_POSITION, (0.0, 8.0, 10.0, 0.0))
+        glLightfv(GL_LIGHT1, GL_AMBIENT, (0.2, 0.2, 0.2, 1.0))
+        glLightfv(GL_LIGHT1, GL_DIFFUSE, (0.6, 0.6, 0.6, 1.0))
         
         glEnable(GL_COLOR_MATERIAL)
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
@@ -654,8 +657,9 @@ class Game:
         
     def serve_ball(self):
         """Start a new serve"""
-        if not self.game_over:
+        if not self.game_over and not self.waiting_for_serve:
             self.ball.reset(server=self.current_server)
+            self.waiting_for_serve = True
             
     def determine_server(self):
         """Determine who should serve based on total points"""
@@ -680,7 +684,8 @@ class Game:
         if not self.game_over:
             # Determine next server
             self.current_server = self.determine_server()
-            self.serve_ball()
+            self.waiting_for_serve = True
+            self.ball.reset(server=self.current_server)
             
     def check_win(self):
         """Check if someone has won"""
@@ -701,7 +706,8 @@ class Game:
         self.game_over = False
         self.winner = None
         self.paused = False
-        self.serve_ball()
+        self.waiting_for_serve = True
+        self.ball.reset(server=self.current_server)
         
     def toggle_pause(self):
         """Toggle pause state"""
@@ -718,7 +724,8 @@ class Game:
         """Handle continuous input (key presses)"""
         if self.paused or self.game_over:
             return
-            
+        
+        # Allow paddle movement even when waiting for serve
         keys = pygame.key.get_pressed()
         
         # Player 1 (A/D)
@@ -739,7 +746,7 @@ class Game:
             
     def update(self, dt):
         """Update game state"""
-        if self.paused or self.game_over:
+        if self.paused or self.game_over or self.waiting_for_serve:
             return
             
         # Update paddles
@@ -886,8 +893,14 @@ class Game:
             self.draw_text_2d(fps_text, self.width - 120, 50, self.font_small, (200, 200, 100))
         
         # Controls
-        controls = "P1: A/D | P2: ←/→ | C: Camera | P: Pause | R: Reset"
+        controls = "P1: A/D | P2: ←/→ | SPACE: Serve | C: Camera | P: Pause | R: Reset"
         self.draw_text_2d(controls, 20, self.height - 35, self.font_small, (150, 150, 150))
+        
+        # Serve waiting indicator
+        if self.waiting_for_serve and not self.game_over and not self.paused:
+            serve_text = "Press SPACE to Serve"
+            self.draw_text_2d(serve_text, self.width // 2 - 150, self.height // 2, 
+                            self.font_medium, (255, 255, 0))
         
         # Pause overlay
         if self.paused:
@@ -941,6 +954,10 @@ class Game:
                         self.toggle_pause()
                     elif event.key == K_f:
                         self.show_fps = not self.show_fps
+                    elif event.key == K_SPACE:
+                        # Serve button
+                        if self.waiting_for_serve and not self.game_over and not self.paused:
+                            self.waiting_for_serve = False
                         
             # Input
             self.handle_input(dt)
