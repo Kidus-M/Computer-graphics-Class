@@ -51,13 +51,13 @@ NET_HEIGHT = 0.8
 
 # Physics Constants
 # Physics Constants
-GRAVITY = -15.0             # Balanced Standard Gravity
-DRAG_COEFF = 0.025          # Low drag for consistency
-MAGNUS_STRENGTH = 6.0       
+GRAVITY = -13.0             # Floaty gravity for easy play
+DRAG_COEFF = 0.02           # Minimal drag
+MAGNUS_STRENGTH = 5.0       # Reduced spin effect
 RESTITUTION = 0.85          
 
 # Paddle
-PADDLE_WIDTH = 2.4          # Slightly wider for forgiving hits
+PADDLE_WIDTH = 2.4          
 PADDLE_HEIGHT = 2.0
 PADDLE_Z_OFFSET = 7.0
 
@@ -182,7 +182,7 @@ class Paddle:
         self.width = PADDLE_WIDTH
         self.height = PADDLE_HEIGHT # Actually Diameter of the blade
         self.depth = 0.2
-        self.speed = 28.0 # Super fast movement
+        self.speed = 22.0 # Controlled movement speed
         self.color_rubber = color_rubber
         self.tilt = 0.0
         
@@ -254,7 +254,7 @@ class Ball:
         
         
         # Launch params
-        speed = 22.0 # Fast serve for deep landing
+        speed = 14.0 # Gentle serve
         forward = 1 if server == 1 else -1
         
         self.vx = random.uniform(-0.3, 0.3) 
@@ -601,24 +601,24 @@ class Game:
                     
                     if move_towards:
                         # HIT!
-                        # STABLE PHYSICS: Fixed return speed
-                        # This prevents "underhit" (too weak) or "overhit" (rocket)
+                        # STABLE PHYSICS: CONSTANT SPEED
+                        # No acceleration from incoming ball. Pure Arcade Control.
                         direction = -1 if b.vz > 0 else 1
                         
-                        base_return_speed = 26.0 
-                        # Add a tiny bit of the incoming energy (10%)
-                        return_speed = base_return_speed + abs(b.vz) * 0.1
-                        
-                        b.vz = direction * return_speed
+                        b.vz = direction * 21.0 # Moderate, manageable speed
                         
                         # Consistent Arc Loop
                         # Always give enough height to clear net
-                        b.vy = 6.0 
+                        b.vy = 6.5 
 
-                        # Controlled Spin
-                        hit_offset = (b.x - p.x)
-                        b.vx += hit_offset * 4.0 # Aiming
-                        b.spin_x = random.uniform(-1, 1) # Minimal random spin                     b.spin_y = hit_offset * 2.5
+                        # DIRECTIONAL AIMING (Gentler)
+                        hit_offset = (b.x - p.x) 
+                        b.vx = hit_offset * 3.5  # Reduced sensitivity (was 6.0)
+                        
+                        # Spin Logic
+                        b.spin_x = 0 
+                        b.spin_z = -hit_offset * 1.5
+                        b.spin_y = hit_offset * 2.0
                         
                         # Reset bounces
                         b.bounces_side1 = 0
