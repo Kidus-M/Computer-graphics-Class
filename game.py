@@ -48,8 +48,9 @@ TABLE_THICKNESS = 0.3
 NET_HEIGHT = 0.8            
 
 # Physics Constants
-GRAVITY = -25.0             # Stronger gravity for snappy feel
-DRAG_COEFF = 0.15           # Air resistance
+# Physics Constants
+GRAVITY = -18.0             # Gravity (m/s^2)
+DRAG_COEFF = 0.08           # Air resistance (reduced)
 MAGNUS_STRENGTH = 6.0       # Spin curve strength
 RESTITUTION = 0.85          # Bounciness of table
 
@@ -245,17 +246,21 @@ class Ball:
         self.y = NET_HEIGHT + 0.5
         self.z = -5.0 if server == 1 else 5.0
         
+        
         # Launch params
-        speed = 12.0
+        speed = 22.0 # Increased serve speed
         forward = 1 if server == 1 else -1
         
-        self.vx = random.uniform(-2, 2)
-        self.vy = random.uniform(3, 5) # Toss up
-        self.vz = forward * speed * 0.5 # Initial gentle toss
+        self.vx = random.uniform(-1, 1) # Reduced lateral randomness
+        self.vy = random.uniform(4, 6)  # Higher toss for arc
+        self.vz = forward * speed * 0.6 # Stronger forward push
         
         self.spin_x = 0.0 # Top/Back spin  (Magus force in Y/Z)
         self.spin_y = 0.0 # Side spin      (Magnus force in X/Z)
         self.in_play = True
+        self.last_hit_by = 0 # 0=None, 1=P1, 2=P2
+        self.bounces_side1 = 0
+        self.bounces_side2 = 0
         self.trail.clear()
 
     def update(self, dt):
@@ -513,43 +518,73 @@ class Game:
         # Table Bounce
         if b.y < BALL_RADIUS and b.vy < 0:
             if abs(b.x) < TABLE_HALF_WIDTH and abs(b.z) < TABLE_HALF_DEPTH:
+                # Physics Reset
                 b.y = BALL_RADIUS
                 b.vy = -b.vy * RESTITUTION
-                # Friction
                 b.vx *= 0.95
                 b.vz *= 0.95
                 
-                if self.sound_gen: self.sound_gen.play('table_hit')
+                # Sound (Only if bouncing hard enough to avoid spam)
+                if self.sound_gen and abs(b.vy) > 0.5: 
+                    self.sound_gen.play('table_hit')
+                
                 self.spawn_particles(b.x, b.y, b.z, 3)
 
+                # Game Rule: Count Bounces
+                if b.z < 0:
+                    b.bounces_side1 += 1
+                    b.bounces_side2 = 0 # Reset other side
+                else:
+                    b.bounces_side2 += 1
+                    b.bounces_side1 = 0
+                
+                # Check for Point (Double Bounce)
+                if b.bounces_side1 >= 2:
+                    self.score_point(2) # P1 let it bounce twice, P2 wins point
+                elif b.bounces_side2 >= 2:
+                    self.score_point(1)
+
         # Paddle Collision
-        # Simple AABB + Z-threshold Check
         for i, p in enumerate([self.p1, self.p2]):
-            # Check Z depth
+            player_id = i + 1
+            # Check Z proximity
             dist_z = abs(b.z - p.z)
-            if dist_z < (BALL_RADIUS + 0.3): # Close in Z
-                # Check Face overlap (X/Y)
+            if dist_z < (BALL_RADIUS + 0.3): 
+                # Check Face overlap
                 if abs(b.x - p.x) < (PADDLE_WIDTH/2 + BALL_RADIUS) and \
                    abs(b.y - p.y) < (PADDLE_HEIGHT/2 + BALL_RADIUS):
                     
                     # Ensure moving towards paddle
-                    move_towards = (b.vz < 0 and i==0) or (b.vz > 0 and i==1)
+                    move_towards = (b.vz < 0 and player_id==1) or (b.vz > 0 and player_id==2)
+                    
                     if move_towards:
                         # HIT!
-                        b.vz = -b.vz * 1.1 # Speed up
+                        # POWER BOOST: Add base velocity + multiplier
+                        # This fixes "weak paddle" feel
+                        boost = 5.0 
+                        b.vz = -b.vz * 1.2 - (boost if b.vz < 0 else -boost)
                         
-                        # Add Spin/Curve based on movement
+                        # Add upward lift for arc
+                        b.vy = abs(b.vy) * 0.8 + 2.0 
+
+                        # Add Spin/Curve
                         hit_offset = (b.x - p.x)
-                        b.vx += hit_offset * 5.0
-                        b.spin_x = random.uniform(-0.5, 0.5) # Slight random topspin
-                        b.spin_y = hit_offset * 1.5 # Sidespin
+                        b.vx += hit_offset * 6.0
+                        b.spin_x = random.uniform(-2, 2)
+                        b.spin_y = hit_offset * 2.5
+                        
+                        # Reset bounces
+                        b.bounces_side1 = 0
+                        b.bounces_side2 = 0
+                        b.last_hit_by = player_id
                         
                         # Sound
                         if self.sound_gen: self.sound_gen.play('paddle_hit')
-                        self.spawn_particles(b.x, b.y, b.z, 10)
+                        self.spawn_particles(b.x, b.y, b.z, 12)
                         
-                        # Skill shot boost
-                        if abs(b.vz) > 25: b.vz *= 0.9 # Cap speed
+                        # Cap speed to prevent physics glitching
+                        max_speed = 35.0
+                        if abs(b.vz) > max_speed: b.vz = max_speed if b.vz > 0 else -max_speed
 
         # Scoring
         if b.z > 15: self.score_point(1) # P2 missed, P1 scores
