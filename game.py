@@ -24,6 +24,7 @@ Controls:
 import math
 import random
 import sys
+import os
 import pygame
 from pygame.locals import *
 from OpenGL.GL import *
@@ -444,6 +445,7 @@ def draw_table_mesh(quadric):
 
 class Game:
     def __init__(self, w=1400, h=900):
+        os.environ['SDL_VIDEO_CENTERED'] = '1' # Center window
         pygame.init()
         pygame.display.set_mode((w, h), DOUBLEBUF | OPENGL | RESIZABLE)
         pygame.display.set_caption("3D Ping Pong Pro")
@@ -511,7 +513,11 @@ class Game:
         
         self.p1 = Paddle(-PADDLE_Z_OFFSET, (0.8, 0.1, 0.1)) # Red
         self.p2 = Paddle(PADDLE_Z_OFFSET, (0.1, 0.1, 0.1))  # Black
-        self.ai = AIPlayer(self.p2)
+        
+        self.player_side = 1 # 1=Red(Back), 2=Black(Front)
+        self.ai_enabled = True # Default to AI opponent
+        # AI controls the player NOT selected
+        self.ai = AIPlayer(self.p2) # Default AI controls P2
         self.particles = []
 
     def handle_collisions(self):
@@ -660,6 +666,7 @@ class Game:
         self.handle_collisions()
         
         if self.ai_enabled:
+            # AI always controls the OPPONENT of the human
             self.ai.update(dt, self.ball)
 
     def render(self):
@@ -707,8 +714,13 @@ class Game:
 
         # HUD
         draw_text(f"{self.score[0]} - {self.score[1]}", self.width//2, 20, center=True)
-        draw_text(f"P2: {'AI' if self.ai_enabled else 'HUMAN'}", self.width-150, 20, font=self.font_sm, col=(200,200,100))
         
+        mode_txt = f"YOU: P{self.player_side} | OPP: {'AI' if self.ai_enabled else 'HUMAN'}"
+        draw_text(mode_txt, self.width-200, 20, font=self.font_sm, col=(200,200,100))
+        
+        # Controls
+        controls = "WASD/Arrows: Move | SPACE: Serve | TAB: Switch Sides | I: Toggle AI | C: Cam"
+        draw_text(controls, 20, self.height - 40, font=self.font_sm, col=(150,150,150))
         if self.serve_state == 'WAIT':
              draw_text("PRESS SPACE TO SERVE", self.width//2, self.height//2 + 50, col=(255,255,0), center=True)
              
@@ -738,16 +750,38 @@ class Game:
                     elif event.key == K_c:
                          idx = self.cam_keys.index(self.cam_mode)
                          self.cam_mode = self.cam_keys[(idx+1)%len(self.cam_keys)]
-                    elif event.key == K_i: self.ai_enabled = not self.ai_enabled
+                    elif event.key == K_i: 
+                        self.ai_enabled = not self.ai_enabled
+                    elif event.key == K_TAB:
+                        # Switch Sides
+                        self.player_side = 2 if self.player_side == 1 else 1
+                        # Update AI to control the other paddle
+                        self.ai.paddle = self.p1 if self.player_side == 2 else self.p2
+                        # Switch Camera
+                        self.cam_mode = 'player2' if self.player_side == 2 else 'player1'
             
             # Input
             keys = pygame.key.get_pressed()
-            if keys[K_a]: self.p1.move_horizontal(-1, dt)
-            if keys[K_d]: self.p1.move_horizontal(1, dt)
             
-            if not self.ai_enabled:
-                if keys[K_LEFT]: self.p2.move_horizontal(-1, dt)
-                if keys[K_RIGHT]: self.p2.move_horizontal(1, dt)
+            # Human Input
+            if self.player_side == 1:
+                # Controlling P1 (Red)
+                if keys[K_a] or keys[K_LEFT]: self.p1.move_horizontal(-1, dt)
+                if keys[K_d] or keys[K_RIGHT]: self.p1.move_horizontal(1, dt)
+                
+                # Manual P2 override (local multiplayer)
+                if not self.ai_enabled:
+                    if keys[K_KP_4]: self.p2.move_horizontal(-1, dt)
+                    if keys[K_KP_6]: self.p2.move_horizontal(1, dt)
+            else:
+                # Controlling P2 (Black)
+                if keys[K_a] or keys[K_LEFT]: self.p2.move_horizontal(-1, dt)
+                if keys[K_d] or keys[K_RIGHT]: self.p2.move_horizontal(1, dt)
+                
+                # Manual P1 override
+                if not self.ai_enabled:
+                    if keys[K_KP_4]: self.p1.move_horizontal(-1, dt)
+                    if keys[K_KP_6]: self.p1.move_horizontal(1, dt)
 
             self.update(dt)
             self.render()
