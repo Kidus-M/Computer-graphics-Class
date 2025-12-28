@@ -502,11 +502,13 @@ class Game:
     def reset_match(self):
         self.score = [0, 0]
         self.server = 1
-        self.waiting_serve = True
+        self.serve_state = 'WAIT' # WAIT, TOSS, PLAY
         self.game_over = False
         self.winner_text = ""
         
         self.ball = Ball()
+        self.ball.in_play = False
+        
         self.p1 = Paddle(-PADDLE_Z_OFFSET, (0.8, 0.1, 0.1)) # Red
         self.p2 = Paddle(PADDLE_Z_OFFSET, (0.1, 0.1, 0.1))  # Black
         self.ai = AIPlayer(self.p2)
@@ -610,8 +612,10 @@ class Game:
             self.game_over = True
             self.winner_text = f"PLAYER {winner_idx} WINS!"
         else:
-            self.waiting_serve = True
-            self.ball.reset(server=1 if ((sum(self.score)//2)%2==0) else 2) 
+            self.serve_state = 'WAIT'
+            # Determine Server (2 serves each)
+            self.server = 1 if ((sum(self.score)//2)%2==0) else 2
+            self.ball.in_play = False 
 
     def spawn_particles(self, x, y, z, n):
         for _ in range(n):
@@ -622,16 +626,36 @@ class Game:
         self.particles = [p for p in self.particles if p.life > 0]
         for p in self.particles: p.update(dt)
         
-        if self.waiting_serve:
-            # Sync ball to server paddle
+        if self.game_over: return
+
+        # Serve State Machine
+        if self.serve_state == 'WAIT':
+            # Ball sticks to server paddle
             server_z = -5 if self.server == 1 else 5
             self.ball.x = 0
-            self.ball.y = 2
+            self.ball.y = 1.6 # Hold height
             self.ball.z = server_z
+            self.ball.vx = self.ball.vy = self.ball.vz = 0
             return
             
-        if self.game_over: return
-        
+        elif self.serve_state == 'TOSS':
+            # Physics only for toss (Gravity)
+            self.ball.vy += GRAVITY * dt
+            self.ball.y += self.ball.vy * dt
+            
+            # Check for HIT moment (falling + height)
+            if self.ball.vy < 0 and self.ball.y < 1.8:
+                # STRIKE! (Auto-hit logic)
+                self.serve_state = 'PLAY'
+                self.ball.in_play = True
+                self.ball.reset(server=self.server) # Apply launch velocity
+                
+                # Visuals
+                if self.sound_gen: self.sound_gen.play('paddle_hit')
+                self.spawn_particles(self.ball.x, self.ball.y, self.ball.z, 15)
+            return
+
+        # Play State
         self.ball.update(dt)
         self.handle_collisions()
         
@@ -685,7 +709,7 @@ class Game:
         draw_text(f"{self.score[0]} - {self.score[1]}", self.width//2, 20, center=True)
         draw_text(f"P2: {'AI' if self.ai_enabled else 'HUMAN'}", self.width-150, 20, font=self.font_sm, col=(200,200,100))
         
-        if self.waiting_serve:
+        if self.serve_state == 'WAIT':
              draw_text("PRESS SPACE TO SERVE", self.width//2, self.height//2 + 50, col=(255,255,0), center=True)
              
         if self.game_over:
@@ -706,10 +730,11 @@ class Game:
                     if event.key == K_ESCAPE: self.running = False
                     elif event.key == K_r: self.reset_match()
                     elif event.key == K_SPACE: 
-                        if self.waiting_serve: 
-                            self.waiting_serve = False
-                            # Launch ball
-                            self.ball.reset(server=1 if ((sum(self.score)//2)%2==0) else 2)
+                        if self.serve_state == 'WAIT': 
+                            self.serve_state = 'TOSS'
+                            # Toss Up
+                            self.ball.vy = 8.0 # Visible toss
+                            if self.sound_gen: self.sound_gen.play('table_hit') # Use soft sound for toss catch
                     elif event.key == K_c:
                          idx = self.cam_keys.index(self.cam_mode)
                          self.cam_mode = self.cam_keys[(idx+1)%len(self.cam_keys)]
