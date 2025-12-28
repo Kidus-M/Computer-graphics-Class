@@ -52,13 +52,13 @@ NET_HEIGHT = 0.8
 # Physics Constants
 # Physics Constants
 GRAVITY = -14.0             # Lower gravity = floatier ball = easier to hit
-DRAG_COEFF = 0.05           # Low drag to keep it moving
+DRAG_COEFF = 0.06           # Slightly more drag to keep speed manageable
 MAGNUS_STRENGTH = 6.0       
 RESTITUTION = 0.85          
 
 # Paddle
-PADDLE_WIDTH = 1.8          # Wider paddle for easier hits
-PADDLE_HEIGHT = 1.8
+PADDLE_WIDTH = 2.2          # Huge paddle - impossible to miss
+PADDLE_HEIGHT = 2.0
 PADDLE_Z_OFFSET = 7.0
 
 # Ball
@@ -71,9 +71,9 @@ WIN_BY = 2
 
 # Camera
 CAMERA_ANGLES = {
-    'default': {'pos': (0, -10, -28), 'rot': (25, 0, 0)},
-    'player1': {'pos': (0, -5, -19), 'rot': (15, 0, 0)}, # Higher and steeper
-    'player2': {'pos': (0, -5, 19), 'rot': (-15, 0, 180)},
+    'default': {'pos': (0, -12, -30), 'rot': (30, 0, 0)}, # TV Broadcast View
+    'player1': {'pos': (0, -3, -17), 'rot': (10, 0, 0)},  # Classic Player View (Lower)
+    'player2': {'pos': (0, -3, 17), 'rot': (-10, 0, 180)},
     'side': {'pos': (-18, -4, 0), 'rot': (15, -90, 0)},
     'top': {'pos': (0, -22, 0), 'rot': (90, 0, 0)},
 }
@@ -182,7 +182,7 @@ class Paddle:
         self.width = PADDLE_WIDTH
         self.height = PADDLE_HEIGHT # Actually Diameter of the blade
         self.depth = 0.2
-        self.speed = 24.0 # Much faster movement for reaction
+        self.speed = 28.0 # Super fast movement
         self.color_rubber = color_rubber
         self.tilt = 0.0
         
@@ -252,10 +252,10 @@ class Ball:
         
         
         # Launch params
-        speed = 16.0 # Even slower serve for playability
+        speed = 15.0 # Slow, easy serve
         forward = 1 if server == 1 else -1
         
-        self.vx = random.uniform(-0.5, 0.5) 
+        self.vx = random.uniform(-0.3, 0.3) 
         self.vy = random.uniform(3.5, 5) # Gentle toss
         self.vz = forward * speed * 0.6
         
@@ -749,7 +749,7 @@ class Game:
         draw_text(mode_txt, self.width-200, 20, font=self.font_sm, col=(200,200,100))
         
         # Controls
-        controls = "WASD/Arrows: Move | SPACE: Serve | TAB: Switch Sides | I: Toggle AI | C: Cam"
+        controls = "WASD OR Arrows: Move | SPACE: Serve | TAB: Switch Sides | I: Toggle AI"
         draw_text(controls, 20, self.height - 40, font=self.font_sm, col=(150,150,150))
         if self.serve_state == 'WAIT':
              draw_text("PRESS SPACE TO SERVE", self.width//2, self.height//2 + 50, col=(255,255,0), center=True)
@@ -793,25 +793,27 @@ class Game:
             # Input
             keys = pygame.key.get_pressed()
             
-            # Human Input
-            if self.player_side == 1:
-                # Controlling P1 (Red)
-                if keys[K_a] or keys[K_LEFT]: self.p1.move_horizontal(-1, dt)
-                if keys[K_d] or keys[K_RIGHT]: self.p1.move_horizontal(1, dt)
-                
-                # Manual P2 override (local multiplayer)
-                if not self.ai_enabled:
-                    if keys[K_KP_4]: self.p2.move_horizontal(-1, dt)
-                    if keys[K_KP_6]: self.p2.move_horizontal(1, dt)
+            # Unified Inputs (Both Arrow and WASD work for active player)
+            move_left = keys[K_a] or keys[K_LEFT]
+            move_right = keys[K_d] or keys[K_RIGHT]
+            
+            # Local Multiplayer Override (If AI off, Arrows=P2, WASD=P1)
+            if not self.ai_enabled:
+                 move_left_p1 = keys[K_a]
+                 move_right_p1 = keys[K_d]
+                 move_left_p2 = keys[K_LEFT]
+                 move_right_p2 = keys[K_RIGHT]
+                 
+                 self.p1.move_horizontal(-1 if move_left_p1 else (1 if move_right_p1 else 0), dt)
+                 self.p2.move_horizontal(-1 if move_left_p2 else (1 if move_right_p2 else 0), dt)
             else:
-                # Controlling P2 (Black)
-                if keys[K_a] or keys[K_LEFT]: self.p2.move_horizontal(-1, dt)
-                if keys[K_d] or keys[K_RIGHT]: self.p2.move_horizontal(1, dt)
+                # Single Player (Active Side)
+                dx = -1 if move_left else (1 if move_right else 0)
                 
-                # Manual P1 override
-                if not self.ai_enabled:
-                    if keys[K_KP_4]: self.p1.move_horizontal(-1, dt)
-                    if keys[K_KP_6]: self.p1.move_horizontal(1, dt)
+                if self.player_side == 1:
+                    self.p1.move_horizontal(dx, dt)
+                else:
+                    self.p2.move_horizontal(dx, dt)
 
             self.update(dt)
             self.render()
