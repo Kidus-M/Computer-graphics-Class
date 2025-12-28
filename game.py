@@ -51,13 +51,13 @@ NET_HEIGHT = 0.8
 
 # Physics Constants
 # Physics Constants
-GRAVITY = -14.0             # Lower gravity = floatier ball = easier to hit
-DRAG_COEFF = 0.06           # Slightly more drag to keep speed manageable
+GRAVITY = -15.0             # Balanced Standard Gravity
+DRAG_COEFF = 0.025          # Low drag for consistency
 MAGNUS_STRENGTH = 6.0       
 RESTITUTION = 0.85          
 
 # Paddle
-PADDLE_WIDTH = 2.2          # Huge paddle - impossible to miss
+PADDLE_WIDTH = 2.4          # Slightly wider for forgiving hits
 PADDLE_HEIGHT = 2.0
 PADDLE_Z_OFFSET = 7.0
 
@@ -251,8 +251,10 @@ class Ball:
         
         
         
+        
+        
         # Launch params
-        speed = 15.0 # Slow, easy serve
+        speed = 22.0 # Fast serve for deep landing
         forward = 1 if server == 1 else -1
         
         self.vx = random.uniform(-0.3, 0.3) 
@@ -586,6 +588,7 @@ class Game:
 
         # Paddle Collision
         for i, p in enumerate([self.p1, self.p2]):
+            player_id = i + 1
             # Check Z proximity (Widen slightly for easier hits)
             dist_z = abs(b.z - p.z)
             if dist_z < (BALL_RADIUS + 0.5): 
@@ -598,18 +601,24 @@ class Game:
                     
                     if move_towards:
                         # HIT!
-                        # Physics tuning for easier play
-                        boost = 4.0 # Reduced from 5.0
-                        b.vz = -b.vz * 1.1 - (boost if b.vz < 0 else -boost)
+                        # STABLE PHYSICS: Fixed return speed
+                        # This prevents "underhit" (too weak) or "overhit" (rocket)
+                        direction = -1 if b.vz > 0 else 1
                         
-                        # Soften the arc lift so it doesn't fly out
-                        b.vy = abs(b.vy) * 0.7 + 1.5 
+                        base_return_speed = 26.0 
+                        # Add a tiny bit of the incoming energy (10%)
+                        return_speed = base_return_speed + abs(b.vz) * 0.1
+                        
+                        b.vz = direction * return_speed
+                        
+                        # Consistent Arc Loop
+                        # Always give enough height to clear net
+                        b.vy = 6.0 
 
-                        # Add Spin/Curve
+                        # Controlled Spin
                         hit_offset = (b.x - p.x)
-                        b.vx += hit_offset * 5.0 # Direction control
-                        b.spin_x = random.uniform(-2, 2)
-                        b.spin_y = hit_offset * 2.5
+                        b.vx += hit_offset * 4.0 # Aiming
+                        b.spin_x = random.uniform(-1, 1) # Minimal random spin                     b.spin_y = hit_offset * 2.5
                         
                         # Reset bounces
                         b.bounces_side1 = 0
