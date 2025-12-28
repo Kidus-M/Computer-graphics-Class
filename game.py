@@ -56,7 +56,7 @@ MAGNUS_STRENGTH = 6.0       # Spin curve strength
 RESTITUTION = 0.85          # Bounciness of table
 
 # Paddle
-PADDLE_WIDTH = 1.4
+PADDLE_WIDTH = 1.5
 PADDLE_HEIGHT = 1.8
 PADDLE_Z_OFFSET = 7.0
 
@@ -70,9 +70,9 @@ WIN_BY = 2
 
 # Camera
 CAMERA_ANGLES = {
-    'default': {'pos': (0, -6, -26), 'rot': (20, 0, 0)},
-    'player1': {'pos': (0, -3, -16), 'rot': (10, 0, 0)},
-    'player2': {'pos': (0, -3, 16), 'rot': (-10, 0, 180)},
+    'default': {'pos': (0, -10, -28), 'rot': (25, 0, 0)},
+    'player1': {'pos': (0, -5, -19), 'rot': (15, 0, 0)}, # Higher and steeper
+    'player2': {'pos': (0, -5, 19), 'rot': (-15, 0, 180)},
     'side': {'pos': (-18, -4, 0), 'rot': (15, -90, 0)},
     'top': {'pos': (0, -22, 0), 'rot': (90, 0, 0)},
 }
@@ -248,13 +248,14 @@ class Ball:
         self.z = -5.0 if server == 1 else 5.0
         
         
+        
         # Launch params
-        speed = 22.0 # Increased serve speed
+        speed = 19.0 # Slightly easier serve to return
         forward = 1 if server == 1 else -1
         
-        self.vx = random.uniform(-1, 1) # Reduced lateral randomness
-        self.vy = random.uniform(4, 6)  # Higher toss for arc
-        self.vz = forward * speed * 0.6 # Stronger forward push
+        self.vx = random.uniform(-0.8, 0.8) 
+        self.vy = random.uniform(4, 6)
+        self.vz = forward * speed * 0.6
         
         self.spin_x = 0.0 # Top/Back spin  (Magus force in Y/Z)
         self.spin_y = 0.0 # Side spin      (Magnus force in X/Z)
@@ -554,30 +555,28 @@ class Game:
 
         # Paddle Collision
         for i, p in enumerate([self.p1, self.p2]):
-            player_id = i + 1
-            # Check Z proximity
+            # Check Z proximity (Widen slightly for easier hits)
             dist_z = abs(b.z - p.z)
-            if dist_z < (BALL_RADIUS + 0.3): 
-                # Check Face overlap
-                if abs(b.x - p.x) < (PADDLE_WIDTH/2 + BALL_RADIUS) and \
-                   abs(b.y - p.y) < (PADDLE_HEIGHT/2 + BALL_RADIUS):
+            if dist_z < (BALL_RADIUS + 0.5): 
+                # Check Face overlap (Forgiving collision)
+                if abs(b.x - p.x) < (PADDLE_WIDTH/2 + BALL_RADIUS + 0.2) and \
+                   abs(b.y - p.y) < (PADDLE_HEIGHT/2 + BALL_RADIUS + 0.2):
                     
                     # Ensure moving towards paddle
                     move_towards = (b.vz < 0 and player_id==1) or (b.vz > 0 and player_id==2)
                     
                     if move_towards:
                         # HIT!
-                        # POWER BOOST: Add base velocity + multiplier
-                        # This fixes "weak paddle" feel
-                        boost = 5.0 
-                        b.vz = -b.vz * 1.2 - (boost if b.vz < 0 else -boost)
+                        # Physics tuning for easier play
+                        boost = 4.0 # Reduced from 5.0
+                        b.vz = -b.vz * 1.1 - (boost if b.vz < 0 else -boost)
                         
-                        # Add upward lift for arc
-                        b.vy = abs(b.vy) * 0.8 + 2.0 
+                        # Soften the arc lift so it doesn't fly out
+                        b.vy = abs(b.vy) * 0.7 + 1.5 
 
                         # Add Spin/Curve
                         hit_offset = (b.x - p.x)
-                        b.vx += hit_offset * 6.0
+                        b.vx += hit_offset * 5.0 # Direction control
                         b.spin_x = random.uniform(-2, 2)
                         b.spin_y = hit_offset * 2.5
                         
