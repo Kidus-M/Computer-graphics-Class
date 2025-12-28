@@ -51,13 +51,13 @@ NET_HEIGHT = 0.8
 
 # Physics Constants
 # Physics Constants
-GRAVITY = -13.0             # Floaty gravity for easy play
-DRAG_COEFF = 0.02           # Minimal drag
-MAGNUS_STRENGTH = 5.0       # Reduced spin effect
+GRAVITY = -25.0             # Snappy, realistic gravity
+DRAG_COEFF = 0.005          # ZERO DRAG - Prevents "landing short"
+MAGNUS_STRENGTH = 8.0       
 RESTITUTION = 0.85          
 
 # Paddle
-PADDLE_WIDTH = 2.4          
+PADDLE_WIDTH = 2.5          
 PADDLE_HEIGHT = 2.0
 PADDLE_Z_OFFSET = 7.0
 
@@ -182,7 +182,7 @@ class Paddle:
         self.width = PADDLE_WIDTH
         self.height = PADDLE_HEIGHT # Actually Diameter of the blade
         self.depth = 0.2
-        self.speed = 22.0 # Controlled movement speed
+        self.speed = 28.0 # Fast and responsive
         self.color_rubber = color_rubber
         self.tilt = 0.0
         
@@ -253,13 +253,15 @@ class Ball:
         
         
         
+        
+        
         # Launch params
-        speed = 14.0 # Gentle serve
+        speed = 26.0 # Fast serve for deep landing
         forward = 1 if server == 1 else -1
         
         self.vx = random.uniform(-0.3, 0.3) 
-        self.vy = random.uniform(3.5, 5) # Gentle toss
-        self.vz = forward * speed * 0.6
+        self.vy = random.uniform(4.0, 5.5) # Strong toss
+        self.vz = forward * speed * 0.7
         
         self.spin_x = 0.0 # Top/Back spin  (Magus force in Y/Z)
         self.spin_y = 0.0 # Side spin      (Magnus force in X/Z)
@@ -601,24 +603,40 @@ class Game:
                     
                     if move_towards:
                         # HIT!
-                        # STABLE PHYSICS: CONSTANT SPEED
-                        # No acceleration from incoming ball. Pure Arcade Control.
-                        direction = -1 if b.vz > 0 else 1
+                        # SMART AIMING: BASELINE TARGETING
                         
-                        b.vz = direction * 21.0 # Moderate, manageable speed
+                        # 1. ARC params (Lower arc = Faster shot)
+                        b.vy = 5.5 
                         
-                        # Consistent Arc Loop
-                        # Always give enough height to clear net
-                        b.vy = 6.5 
+                        # 2. Flight Time Calculation 
+                        # t = -2*vy/g
+                        flight_time = -2.0 * b.vy / GRAVITY 
+                        
+                        # 3. Pick Target Landing Spot
+                        # Z: BASELINE TARGET (approx +/- 8.5)
+                        # Table is +/- 9.0 long, so 8.5 is right at the edge
+                        target_z = 8.5 if player_id == 1 else -8.5
+                        
+                        # X: Left/Right based on where you hit the paddle
+                        hit_offset = (b.x - p.x) # -1.0 to 1.0 (approx)
+                        # Map offset to safe table width (-3.5 to 3.5)
+                        target_x = hit_offset * 4.0 
+                        # Clamp target X
+                        target_x = max(-3.8, min(3.8, target_x))
+                        
+                        # 4. Calculate Required Velocity
+                        # dist = v * t => v = dist / t
+                        dist_z = target_z - b.z
+                        dist_x = target_x - b.x
+                        
+                        # Direct calculation (No drag compensation needed)
+                        b.vz = (dist_z / flight_time)
+                        b.vx = (dist_x / flight_time)
 
-                        # DIRECTIONAL AIMING (Gentler)
-                        hit_offset = (b.x - p.x) 
-                        b.vx = hit_offset * 3.5  # Reduced sensitivity (was 6.0)
-                        
                         # Spin Logic
                         b.spin_x = 0 
-                        b.spin_z = -hit_offset * 1.5
-                        b.spin_y = hit_offset * 2.0
+                        b.spin_z = -hit_offset * 3.0 # Sharp curve
+                        b.spin_y = hit_offset * 4.0
                         
                         # Reset bounces
                         b.bounces_side1 = 0
