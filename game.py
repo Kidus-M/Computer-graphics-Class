@@ -31,10 +31,6 @@ try:
 except ImportError:
     SoundGenerator = None
 
-# ============================================================================
-# CONSTANTS
-# ============================================================================
-
 # Table dimensions
 TABLE_W = 5.0   # Half Width (X) - total width is 10
 TABLE_L = 8.0   # Half Length (Z) - total length is 16
@@ -273,9 +269,6 @@ class Mallet:
         
         glPopMatrix()
 
-# ============================================================================
-# MAIN GAME
-# ============================================================================
 
 class Game:
     def __init__(self, w=1280, h=720):
