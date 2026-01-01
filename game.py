@@ -1,23 +1,17 @@
 """
-3D Ping Pong (Pro Realism Edition)
-==================================
+3D Air Hockey
+=============
 Features:
-- Realistic Physics (Magnus Effect for spin, Air Drag)
-- 3D Modeled Rackets (Blade, Handle, Rubber)
-- AI Opponent (Player 2)
-- Procedural Sound Effects
-- Dynamic Environment
-- Full Rule Set (11 pts, Deuce)
+- Planar Physics (Drift, Friction)
+- 3D Mallets and Puck
+- AI Opponent
+- Wall Bouncing & Goal Detection
+- Particle Effects for Goals/Hits
 
 Controls:
-    Player 1 (Red - Back): A / D
-    Player 2 (Blue - Front): Left / Right (or AI)
-    SPACE: Serve
-    I: Toggle AI for Player 2
-    C: Cycle camera angles
-    P: Pause/Resume
-    F: Toggle FPS counter
-    R: Reset match
+    Player 1 (Bottom): Mouse to move (or WASD)
+    Player 2 (Top): AI
+    R: Reset
     Esc: Quit
 """
 
@@ -25,494 +19,278 @@ import math
 import random
 import sys
 import os
-import ctypes # For DPI Fix
+import ctypes
 import pygame
 from pygame.locals import *
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
-# Try to import SoundGenerator
+# Try importing sound
 try:
     from sound_gen import SoundGenerator
 except ImportError:
     SoundGenerator = None
 
 # ============================================================================
-# CONSTANTS & CONFIG
+# CONSTANTS
 # ============================================================================
 
-# Table dimensions (Standard Table Tennis: 2.74m x 1.525m)
-# We scale slightly for gameplay feel
-TABLE_HALF_WIDTH = 5.0      
-TABLE_HALF_DEPTH = 8.0      
-TABLE_HEIGHT = 0.0          
-TABLE_THICKNESS = 0.3
-NET_HEIGHT = 0.8            
+# Table: 8ft Air Hockey Table approx 2.4m x 1.2m
+# We scale up for visibility
+TABLE_W = 6.0   # Width (X)
+TABLE_L = 10.0  # Length (Z)
+TABLE_H = 0.0   # Height (Y)
+WALL_H = 0.3    # Wall Height
 
-# Physics Constants
-# Physics Constants
-GRAVITY = -25.0             # Snappy, realistic gravity
-DRAG_COEFF = 0.005          # ZERO DRAG - Prevents "landing short"
-MAGNUS_STRENGTH = 8.0       
-RESTITUTION = 0.85          
+GOAL_W = 2.5    # Goal Opening Width
 
-# Paddle
-PADDLE_WIDTH = 2.5          
-PADDLE_HEIGHT = 2.0
-PADDLE_Z_OFFSET = 7.0
+# Physics
+FRICTION = 0.99
+RESTITUTION_WALL = 0.8
+RESTITUTION_PUCK = 0.9
 
-# Ball
-BALL_RADIUS = 0.15
-BALL_MASS = 0.1
+# Dimensions
+PUCK_RADIUS = 0.4
+PUCK_HEIGHT = 0.15
+
+MALLET_RADIUS = 0.6
+MALLET_HEIGHT = 0.5
 
 # Game Rules
-POINTS_TO_WIN = 11
-WIN_BY = 2
+WIN_SCORE = 7
 
 # Camera
-CAMERA_ANGLES = {
-    'default': {'pos': (0, -12, -30), 'rot': (30, 0, 0)}, # TV Broadcast View
-    'player1': {'pos': (0, -3, -17), 'rot': (10, 0, 0)},  # Classic Player View (Lower)
-    'player2': {'pos': (0, -3, 17), 'rot': (-10, 0, 180)},
-    'side': {'pos': (-18, -4, 0), 'rot': (15, -90, 0)},
-    'top': {'pos': (0, -22, 0), 'rot': (90, 0, 0)},
-}
+CAM_OFFSET = (0, -15, -12)
+CAM_ROT = (50, 0, 0) # High angle
 
 # ============================================================================
 # HELPER CLASSES
 # ============================================================================
 
 class Particle:
-    def __init__(self, x, y, z):
+    def __init__(self, x, y, z, color):
         self.x, self.y, self.z = x, y, z
-        self.vx = random.uniform(-3, 3)
-        self.vy = random.uniform(2, 6)
-        self.vz = random.uniform(-3, 3)
-        self.life = 0.6
-        self.max_life = 0.6
+        self.vx = random.uniform(-5, 5)
+        self.vy = random.uniform(2, 8)
+        self.vz = random.uniform(-5, 5)
+        self.life = 1.0
+        self.color = color
         
     def update(self, dt):
         self.x += self.vx * dt
         self.y += self.vy * dt
         self.z += self.vz * dt
-        self.vy += GRAVITY * dt
+        self.vy -= 20.0 * dt # Gravity
         self.life -= dt
         
     def draw(self, quadric):
         if self.life <= 0: return
-        alpha = self.life / self.max_life
         glPushMatrix()
         glTranslatef(self.x, self.y, self.z)
-        glColor4f(1.0, 0.9, 0.4, alpha)
-        # Simple billboard or small sphere
-        gluSphere(quadric, 0.05, 4, 4)
+        glColor4f(*self.color, self.life)
+        gluSphere(quadric, 0.08, 4, 4)
         glPopMatrix()
-
-class BallTrail:
-    def __init__(self, length=10):
-        self.positions = []
-        self.length = length
-        
-    def add(self, x, y, z):
-        self.positions.append((x, y, z))
-        if len(self.positions) > self.length:
-            self.positions.pop(0)
-            
-    def clear(self):
-        self.positions = []
-        
-    def draw(self, quadric):
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        count = len(self.positions)
-        for i, (px, py, pz) in enumerate(self.positions):
-            alpha = (i / count) * 0.4
-            size = BALL_RADIUS * (0.4 + (i/count)*0.6)
-            glPushMatrix()
-            glTranslatef(px, py, pz)
-            glColor4f(1, 1, 0.2, alpha)
-            gluSphere(quadric, size, 6, 6)
-            glPopMatrix()
-        glDisable(GL_BLEND)
 
 # ============================================================================
 # GAME ENTITIES
 # ============================================================================
 
-class AIPlayer:
-    """Simple AI Opponent"""
-    def __init__(self, paddle):
-        self.paddle = paddle
-        self.reaction_timer = 0.0
-        self.target_x = 0.0
-        self.skill_level = 0.8 # 0.0 to 1.0 (Speed/Accuracy)
-        
-    def update(self, dt, ball):
-        # Only react if ball is coming towards us (vz > 0 for Player 2)
-        if ball.vz > 0:
-            # Predict x impact
-            time_to_impact = abs((self.paddle.z - ball.z) / (ball.vz if abs(ball.vz) > 0.1 else 0.1))
-            
-            if time_to_impact < 1.5: # React when closer
-                self.target_x = ball.x + ball.vx * time_to_impact
-                # Add some error based on skill
-                error = (1.0 - self.skill_level) * random.uniform(-1.0, 1.0)
-                if time_to_impact > 0.5: # Refine target as it gets closer
-                    self.target_x += error
-            else:
-                self.target_x = 0.0 # Return to center
-        else:
-            self.target_x = 0.0 # Return to center
-            
-        # Move paddle
-        diff = self.target_x - self.paddle.x
-        force = 10.0 if abs(diff) > 1.0 else 5.0
-        
-        move_dir = 0
-        if diff > 0.2: move_dir = 1
-        elif diff < -0.2: move_dir = -1
-        
-        self.paddle.move_horizontal(move_dir, dt)
-
-class Paddle:
-    def __init__(self, z, color_rubber):
-        self.z = z
-        self.x = 0.0
-        self.y = 1.0
-        self.width = PADDLE_WIDTH
-        self.height = PADDLE_HEIGHT # Actually Diameter of the blade
-        self.depth = 0.2
-        self.speed = 28.0 # Fast and responsive
-        self.color_rubber = color_rubber
-        self.tilt = 0.0
-        
-    def move_horizontal(self, direction, dt):
-        self.x += direction * self.speed * dt
-        limit = TABLE_HALF_WIDTH + 2.0 # Allow moving slightly off table
-        self.x = max(-limit, min(limit, self.x))
-        # Tilt effect
-        target_tilt = -direction * 15.0
-        self.tilt += (target_tilt - self.tilt) * 10.0 * dt
-
-    def draw(self, quadric):
-        glPushMatrix()
-        glTranslatef(self.x, self.y, self.z)
-        glRotatef(self.tilt, 0, 0, 1)
-        glRotatef(90, 0, 1, 0) # Rotate to face forward
-        
-        # 1. Handle (Wood Cylinder)
-        glColor3f(0.6, 0.4, 0.2)
-        glPushMatrix()
-        glTranslatef(0, -0.8, 0)
-        glRotatef(-90, 1, 0, 0)
-        gluCylinder(quadric, 0.12, 0.15, 0.8, 12, 1)
-        # Cap
-        gluDisk(quadric, 0, 0.12, 12, 1)
-        glPopMatrix()
-        
-        # 2. Blade (Wood Disk/Sandwich)
-        # We need a transformation to place the blade head
-        glPushMatrix()
-        glTranslatef(0, 0.5, 0) 
-        glScalef(0.2, 1.0, 1.0) # Thickness, Height, Width scaling
-        
-        # Wood core
-        glColor3f(0.7, 0.6, 0.4)
-        draw_box_centered(0.1, 1.3, 1.25)
-        
-        # 3. Rubber Faces
-        # Face 1
-        glColor3f(*self.color_rubber)
-        glPushMatrix()
-        glTranslatef(0.06, 0, 0)
-        draw_box_centered(0.02, 1.25, 1.2)
-        glPopMatrix()
-        
-        # Face 2 (Black)
-        glColor3f(0.1, 0.1, 0.1)
-        glPushMatrix()
-        glTranslatef(-0.06, 0, 0)
-        draw_box_centered(0.02, 1.25, 1.2)
-        glPopMatrix()
-        
-        glPopMatrix()
-        glPopMatrix()
-
-class Ball:
+class Puck:
     def __init__(self):
-        self.trail = BallTrail()
         self.reset()
         
-    def reset(self, server=1):
+    def reset(self):
         self.x = 0.0
-        self.y = NET_HEIGHT + 0.5
-        self.z = -5.0 if server == 1 else 5.0
-        
-        
-        
-        
-        
-        
-        
-        
-        # Launch params
-        speed = 26.0 # Fast serve for deep landing
-        forward = 1 if server == 1 else -1
-        
-        self.vx = random.uniform(-0.3, 0.3) 
-        self.vy = random.uniform(4.0, 5.5) # Strong toss
-        self.vz = forward * speed * 0.7
-        
-        self.spin_x = 0.0 # Top/Back spin  (Magus force in Y/Z)
-        self.spin_y = 0.0 # Side spin      (Magnus force in X/Z)
-        self.in_play = True
-        self.last_hit_by = 0 # 0=None, 1=P1, 2=P2
-        self.bounces_side1 = 0
-        self.bounces_side2 = 0
-        self.trail.clear()
-
+        self.y = TABLE_H + PUCK_HEIGHT/2
+        self.z = 0.0
+        self.vx = 0.0
+        self.vz = 0.0
+        # Serve random
+        if random.random() > 0.5:
+            self.vz = random.uniform(5, 8)
+            self.vx = random.uniform(-4, 4)
+        else:
+            self.vz = random.uniform(-8, -5)
+            self.vx = random.uniform(-4, 4)
+            
     def update(self, dt):
-        if not self.in_play: return
-
-        # 1. Gravity
-        self.vy += GRAVITY * dt
-
-        # 2. Air Drag (F_drag = -C * v * |v|)
-        v_sq = self.vx**2 + self.vy**2 + self.vz**2
-        v_mag = math.sqrt(v_sq)
-        if v_mag > 0:
-            drag_f = DRAG_COEFF * v_mag
-            self.vx -= drag_f * self.vx * dt
-            self.vy -= drag_f * self.vy * dt
-            self.vz -= drag_f * self.vz * dt
-
-        # 3. Magnus Effect (Lift due to spin)
-        # Force ~ V x Spin
-        # Simple approximation:
-        # Topspin (spin_x > 0) -> Dip down (force -Y)
-        magnus_y = -self.spin_x * self.vz * MAGNUS_STRENGTH * dt
-        # Side spin -> Curve X
-        magnus_x = self.spin_y * self.vz * MAGNUS_STRENGTH * dt
-        
-        self.vy += magnus_y
-        self.vx += magnus_x
-        
         # Move
         self.x += self.vx * dt
-        self.y += self.vy * dt
         self.z += self.vz * dt
         
-        self.trail.add(self.x, self.y, self.z)
+        # Friction
+        self.vx *= FRICTION
+        self.vz *= FRICTION
+        
+        # Wall Collisions (X)
+        limit_x = TABLE_W - PUCK_RADIUS
+        if self.x > limit_x:
+            self.x = limit_x
+            self.vx *= -RESTITUTION_WALL
+            return 'wall'
+        elif self.x < -limit_x:
+            self.x = -limit_x
+            self.vx *= -RESTITUTION_WALL
+            return 'wall'
+
+        # End Walls (Z) - Check if NOT in goal
+        limit_z = TABLE_L - PUCK_RADIUS
+        
+        # Goal Check happens in Game loop usually, but wall bounce here
+        # Simple Wall bounce if outside Goal Width
+        if abs(self.x) > GOAL_W/2:
+            if self.z > limit_z:
+                self.z = limit_z
+                self.vz *= -RESTITUTION_WALL
+                return 'wall'
+            elif self.z < -limit_z:
+                self.z = -limit_z
+                self.vz *= -RESTITUTION_WALL
+                return 'wall'
+                
+        return None
 
     def draw(self, quadric):
-        self.trail.draw(quadric)
+        glPushMatrix()
+        glTranslatef(self.x, self.y, self.z)
+        glRotatef(90, 1, 0, 0)
         
-        # Guide Line (Visual Assist for user)
-        glDisable(GL_LIGHTING)
-        glLineWidth(2.0)
-        glBegin(GL_LINES)
-        # Vertical drop line to table/floor
-        glColor4f(1.0, 1.0, 1.0, 0.3)
-        glVertex3f(self.x, self.y, self.z)
-        glVertex3f(self.x, 0, self.z) 
-        glEnd()
+        # Body
+        glColor3f(0.8, 0.2, 0.2) # Red Puck
+        gluCylinder(quadric, PUCK_RADIUS, PUCK_RADIUS, PUCK_HEIGHT, 16, 1)
         
-        # Shadow on table
-        if self.y > 0:
-            glPushMatrix()
-            # Flatten to table height
-            shadow_y = TABLE_HEIGHT + 0.05 if abs(self.x)<TABLE_HALF_WIDTH and abs(self.z)<TABLE_HALF_DEPTH else -4.9
-            glTranslatef(self.x, shadow_y, self.z)
-            glScalef(1.0, 0.1, 1.0)
-            glColor4f(0.0, 0.0, 0.0, 0.4)
-            gluSphere(quadric, BALL_RADIUS, 8, 8)
-            glPopMatrix()
+        # Top/Bottom Caps
+        gluDisk(quadric, 0, PUCK_RADIUS, 16, 1)
+        glPushMatrix()
+        glTranslatef(0, 0, PUCK_HEIGHT)
+        gluDisk(quadric, 0, PUCK_RADIUS, 16, 1)
+        glPopMatrix()
         
-        glEnable(GL_LIGHTING)
+        glPopMatrix()
+
+class Mallet:
+    def __init__(self, is_player, z_start, color):
+        self.is_player = is_player
+        self.x = 0
+        self.y = TABLE_H 
+        self.z = z_start
+        self.color = color
         
+        # Physics
+        self.vx = 0
+        self.vz = 0
+        self.last_x = 0
+        self.last_z = z_start
+        self.speed = 20.0
+        
+        # Bounds (Half table)
+        if z_start > 0: # Top player (Positive Z)
+            self.min_z, self.max_z = 0.5, TABLE_L - MALLET_RADIUS
+        else: # Bottom player (Negative Z)
+            self.min_z, self.max_z = -TABLE_L + MALLET_RADIUS, -0.5
+
+    def update(self, dt, target_pos=None):
+        self.last_x, self.last_z = self.x, self.z
+        
+        if self.is_player:
+            # Mouse Control or Keyboard
+            keys = pygame.key.get_pressed()
+            dx = 0
+            dz = 0
+            if keys[K_a] or keys[K_LEFT]: dx -= 1
+            if keys[K_d] or keys[K_RIGHT]: dx += 1
+            if keys[K_w] or keys[K_UP]: dz -= 1
+            if keys[K_s] or keys[K_DOWN]: dz += 1
+            
+            # Normalize
+            if dx!=0 or dz!=0:
+                mag = math.sqrt(dx*dx + dz*dz)
+                dx /= mag
+                dz /= mag
+                
+            self.x += dx * self.speed * dt
+            self.z += dz * self.speed * dt
+            
+        else:
+            # AI Logic
+            if target_pos:
+                tx, tz = target_pos
+                
+                # AI Speed limit
+                diff_x = tx - self.x
+                diff_z = tz - self.z
+                
+                # Move towards target
+                self.x += diff_x * 8.0 * dt
+                self.z += diff_z * 8.0 * dt
+                
+                # Defense home position if puck is far
+                # (Simple AI implementation)
+        
+        # Clamp bounds
+        limit_x = TABLE_W - MALLET_RADIUS
+        self.x = max(-limit_x, min(limit_x, self.x))
+        self.z = max(self.min_z, min(self.max_z, self.z))
+        
+        # Calculate Velocity (for collision impulse)
+        self.vx = (self.x - self.last_x) / dt
+        self.vz = (self.z - self.last_z) / dt
+
+    def draw(self, quadric):
         glPushMatrix()
         glTranslatef(self.x, self.y, self.z)
         
-        # Glow
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glColor4f(1.0, 1.0, 0.8, 0.4)
-        gluSphere(quadric, BALL_RADIUS*1.4, 12, 12)
-        glDisable(GL_BLEND)
+        glColor3f(*self.color)
         
-        # Ball
-        glColor3f(1.0, 1.0, 1.0)
-        make_material((1,1,1), (1,1,1), 60)
-        gluSphere(quadric, BALL_RADIUS, 16, 16)
+        # Base
+        glPushMatrix()
+        glRotatef(-90, 1, 0, 0)
+        gluCylinder(quadric, MALLET_RADIUS, MALLET_RADIUS, 0.4, 16, 1)
+        glTranslatef(0, 0, 0.4)
+        gluDisk(quadric, 0, MALLET_RADIUS, 16, 1)
+        glPopMatrix()
+        
+        # Handle
+        glPushMatrix()
+        glTranslatef(0, 0.4, 0)
+        glRotatef(-90, 1, 0, 0)
+        gluCylinder(quadric, 0.2, 0.2, 0.4, 8, 1)
+        glTranslatef(0, 0, 0.4)
+        gluDisk(quadric, 0, 0.2, 8, 1)
+        glPopMatrix()
         
         glPopMatrix()
 
 # ============================================================================
-# RENDERING UTILS
-# ============================================================================
-
-def make_material(diffuse, specular, shininess):
-    glMaterialfv(GL_FRONT, GL_DIFFUSE, (*diffuse, 1.0))
-    glMaterialfv(GL_FRONT, GL_SPECULAR, (*specular, 1.0))
-    glMaterialf(GL_FRONT, GL_SHININESS, shininess)
-
-def draw_box_centered(w, h, d):
-    glPushMatrix()
-    glScalef(w, h, d)
-    glutSolidCube(1.0) if 'glutSolidCube' in globals() else draw_cube_arrays()
-    glPopMatrix()
-
-def draw_cube_arrays():
-    # Simple fallback if GLUT is annoying
-    glBegin(GL_QUADS)
-    # Front
-    glNormal3f(0,0,1)
-    glVertex3f(-0.5, -0.5, 0.5); glVertex3f(0.5, -0.5, 0.5)
-    glVertex3f(0.5, 0.5, 0.5); glVertex3f(-0.5, 0.5, 0.5)
-    # Back
-    glNormal3f(0,0,-1)
-    glVertex3f(-0.5, -0.5, -0.5); glVertex3f(-0.5, 0.5, -0.5)
-    glVertex3f(0.5, 0.5, -0.5); glVertex3f(0.5, -0.5, -0.5)
-    # Right
-    glNormal3f(1,0,0)
-    glVertex3f(0.5, -0.5, -0.5); glVertex3f(0.5, 0.5, -0.5)
-    glVertex3f(0.5, 0.5, 0.5); glVertex3f(0.5, -0.5, 0.5)
-    # Left
-    glNormal3f(-1,0,0)
-    glVertex3f(-0.5, -0.5, -0.5); glVertex3f(-0.5, -0.5, 0.5)
-    glVertex3f(-0.5, 0.5, 0.5); glVertex3f(-0.5, 0.5, -0.5)
-    # Top
-    glNormal3f(0,1,0)
-    glVertex3f(-0.5, 0.5, -0.5); glVertex3f(-0.5, 0.5, 0.5)
-    glVertex3f(0.5, 0.5, 0.5); glVertex3f(0.5, 0.5, -0.5)
-    # Bottom
-    glNormal3f(0,-1,0)
-    glVertex3f(-0.5, -0.5, -0.5); glVertex3f(0.5, -0.5, -0.5)
-    glVertex3f(0.5, -0.5, 0.5); glVertex3f(-0.5, -0.5, 0.5)
-    glEnd()
-
-def draw_stadium():
-    # Large dark room
-    glColor3f(0.1, 0.1, 0.12)
-    glDisable(GL_LIGHTING) # Ambient room feel
-    
-    room_w = 40
-    room_h = 20
-    room_d = 50
-    
-    glBegin(GL_QUADS)
-    # Floor
-    glColor3f(0.05, 0.05, 0.08)
-    glVertex3f(-room_w, -5, -room_d); glVertex3f(room_w, -5, -room_d)
-    glVertex3f(room_w, -5, room_d); glVertex3f(-room_w, -5, room_d)
-    # Ceiling
-    glColor3f(0.02, 0.02, 0.03)
-    glVertex3f(-room_w, room_h, -room_d); glVertex3f(-room_w, room_h, room_d)
-    glVertex3f(room_w, room_h, room_d); glVertex3f(room_w, room_h, -room_d)
-    # Walls (Striped for depth perception)
-    for i in range(-5, 6):
-        c = 0.06 if i % 2 == 0 else 0.08
-        glColor3f(c, c, c+0.02)
-        z1 = i * 10
-        z2 = (i+1) * 10
-        # Right Wall
-        glVertex3f(room_w, -5, z1); glVertex3f(room_w, room_h, z1)
-        glVertex3f(room_w, room_h, z2); glVertex3f(room_w, -5, z2)
-        # Left Wall
-        glVertex3f(-room_w, -5, z1); glVertex3f(-room_w, -5, z2)
-        glVertex3f(-room_w, room_h, z2); glVertex3f(-room_w, room_h, z1)
-        
-    glEnd()
-    glEnable(GL_LIGHTING)
-
-def draw_table_mesh(quadric):
-    # Table Top (Blue)
-    glColor3f(0.0, 0.3, 0.8) # Pro Blue
-    make_material((0, 0.3, 0.8), (0.5, 0.5, 0.5), 30)
-    draw_box_centered(TABLE_HALF_WIDTH*2, TABLE_THICKNESS, TABLE_HALF_DEPTH*2)
-    
-    # Lines (White)
-    glDisable(GL_LIGHTING)
-    glColor3f(1, 1, 1)
-    glLineWidth(2)
-    y = TABLE_THICKNESS/2 + 0.02
-    
-    glBegin(GL_LINES)
-    # Center
-    glVertex3f(0, y, -TABLE_HALF_DEPTH); glVertex3f(0, y, TABLE_HALF_DEPTH)
-    # Edges
-    glVertex3f(-TABLE_HALF_WIDTH, y, -TABLE_HALF_DEPTH); glVertex3f(-TABLE_HALF_WIDTH, y, TABLE_HALF_DEPTH)
-    glVertex3f(TABLE_HALF_WIDTH, y, -TABLE_HALF_DEPTH); glVertex3f(TABLE_HALF_WIDTH, y, TABLE_HALF_DEPTH)
-    glVertex3f(-TABLE_HALF_WIDTH, y, -TABLE_HALF_DEPTH); glVertex3f(TABLE_HALF_WIDTH, y, -TABLE_HALF_DEPTH)
-    glVertex3f(-TABLE_HALF_WIDTH, y, TABLE_HALF_DEPTH); glVertex3f(TABLE_HALF_WIDTH, y, TABLE_HALF_DEPTH)
-    glEnd()
-    glEnable(GL_LIGHTING)
-    
-    # Net
-    glDisable(GL_CULL_FACE)
-    glColor4f(0.9, 0.9, 0.9, 0.8) # Transparentish
-    glBegin(GL_QUADS)
-    glVertex3f(-TABLE_HALF_WIDTH-0.2, y, 0)
-    glVertex3f(TABLE_HALF_WIDTH+0.2, y, 0)
-    glVertex3f(TABLE_HALF_WIDTH+0.2, y+NET_HEIGHT, 0)
-    glVertex3f(-TABLE_HALF_WIDTH-0.2, y+NET_HEIGHT, 0)
-    glEnd()
-    glEnable(GL_CULL_FACE)
-    
-    # Legs (Black metal)
-    glColor3f(0.1, 0.1, 0.1)
-    for x in [-4, 4]:
-        for z in [-6, 6]:
-            glPushMatrix()
-            glTranslatef(x, -2.5, z)
-            glScalef(0.4, 5.0, 0.4)
-            draw_box_centered(1,1,1)
-            glPopMatrix()
-
-# ============================================================================
-# MAIN GAME CLASS
+# MAIN GAME
 # ============================================================================
 
 class Game:
-    def __init__(self, w=1400, h=900):
-        # Window & DPI Fix
-        os.environ['SDL_VIDEO_CENTERED'] = '1' 
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(1) # PROCESS_SYSTEM_DPI_AWARE
-        except Exception:
-            pass # Not Windows 8.1+
-            
+    def __init__(self, w=1280, h=720):
+        os.environ['SDL_VIDEO_CENTERED'] = '1'
         pygame.init()
         pygame.display.set_mode((w, h), DOUBLEBUF | OPENGL | RESIZABLE)
-        pygame.display.set_caption("3D Ping Pong Pro")
+        pygame.display.set_caption("3D Air Hockey")
         self.width, self.height = w, h
         
         self.init_gl()
         
-        # Audio
-        self.sound_gen = None
+        # Sound
+        self.sound = None
         if SoundGenerator:
-            self.sound_gen = SoundGenerator()
+            self.sound = SoundGenerator()
             
-        # Assets
         self.quadric = gluNewQuadric()
         
-        # State
-        self.reset_match()
-        
-        # Camera
-        self.cam_mode = 'default'
-        self.cam_keys = list(CAMERA_ANGLES.keys())
+        self.start_game()
         
         self.clock = pygame.time.Clock()
         self.running = True
-        self.ai_enabled = False
         
-        # Font
+        # Font for scores
         pygame.font.init()
         self.font = pygame.font.SysFont('Arial', 40, bold=True)
-        self.font_sm = pygame.font.SysFont('Arial', 24)
-
+        
     def init_gl(self):
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_LIGHTING)
@@ -521,331 +299,235 @@ class Game:
         glEnable(GL_COLOR_MATERIAL)
         glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE)
         
-        # Lights
-        glLightfv(GL_LIGHT0, GL_POSITION, (10, 20, 10, 0)) # Sun-like
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, (0.9, 0.9, 0.9, 1))
-        glLightfv(GL_LIGHT0, GL_SPECULAR, (1, 1, 1, 1))
-        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, (0.3, 0.3, 0.3, 1))
+        glLightfv(GL_LIGHT0, GL_POSITION, (5, 10, 5, 0))
+        glLightfv(GL_LIGHT0, GL_DIFFUSE, (1, 1, 1, 1))
         
         self.resize(self.width, self.height)
-
+        
     def resize(self, w, h):
         self.width, self.height = w, h
         glViewport(0, 0, w, h)
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
-        gluPerspective(45, w/h, 0.1, 200)
+        gluPerspective(45, w/h, 0.1, 100)
         glMatrixMode(GL_MODELVIEW)
-
-    def reset_match(self):
-        self.score = [0, 0]
-        self.server = 1
-        self.serve_state = 'WAIT' # WAIT, TOSS, PLAY
-        self.game_over = False
-        self.winner_text = ""
         
-        self.ball = Ball()
-        self.ball.in_play = False
-        
-        self.p1 = Paddle(-PADDLE_Z_OFFSET, (0.8, 0.1, 0.1)) # Red
-        self.p2 = Paddle(PADDLE_Z_OFFSET, (0.1, 0.1, 0.1))  # Black
-        
-        self.player_side = 1 # 1=Red(Back), 2=Black(Front)
-        self.ai_enabled = True # Default to AI opponent
-        # AI controls the player NOT selected
-        self.ai = AIPlayer(self.p2) # Default AI controls P2
+    def start_game(self):
+        self.p1 = Mallet(True, -6.0, (0.2, 0.2, 0.9)) # Blue (User)
+        self.p2 = Mallet(False, 6.0, (0.9, 0.2, 0.2)) # Red (AI)
+        self.puck = Puck()
+        self.scores = [0, 0]
         self.particles = []
-
-    def handle_collisions(self):
-        b = self.ball
+        self.winner = None
         
-        # Table Bounce
-        if b.y < BALL_RADIUS and b.vy < 0:
-            if abs(b.x) < TABLE_HALF_WIDTH and abs(b.z) < TABLE_HALF_DEPTH:
-                # Physics Reset
-                b.y = BALL_RADIUS
-                b.vy = -b.vy * RESTITUTION
-                b.vx *= 0.95
-                b.vz *= 0.95
-                
-                # Sound (Only if bouncing hard enough to avoid spam)
-                if self.sound_gen and abs(b.vy) > 0.5: 
-                    self.sound_gen.play('table_hit')
-                
-                self.spawn_particles(b.x, b.y, b.z, 3)
-
-                # Game Rule: Count Bounces
-                if b.z < 0:
-                    b.bounces_side1 += 1
-                    b.bounces_side2 = 0 # Reset other side
-                else:
-                    b.bounces_side2 += 1
-                    b.bounces_side1 = 0
-                
-                # Check for Point (Double Bounce)
-                if b.bounces_side1 >= 2:
-                    self.score_point(2) # P1 let it bounce twice, P2 wins point
-                elif b.bounces_side2 >= 2:
-                    self.score_point(1)
-
-        # Paddle Collision
-        for i, p in enumerate([self.p1, self.p2]):
-            player_id = i + 1
-            # Check Z proximity (Widen slightly for easier hits)
-            dist_z = abs(b.z - p.z)
-            if dist_z < (BALL_RADIUS + 0.5): 
-                # Check Face overlap (Forgiving collision)
-                if abs(b.x - p.x) < (PADDLE_WIDTH/2 + BALL_RADIUS + 0.2) and \
-                   abs(b.y - p.y) < (PADDLE_HEIGHT/2 + BALL_RADIUS + 0.2):
-                    
-                    # Ensure moving towards paddle
-                    move_towards = (b.vz < 0 and player_id==1) or (b.vz > 0 and player_id==2)
-                    
-                    if move_towards:
-                        # HIT!
-                        # SMART AIMING: BASELINE TARGETING
-                        
-                        # 1. ARC params (Lower arc = Faster shot)
-                        b.vy = 5.5 
-                        
-                        # 2. Flight Time Calculation 
-                        # t = -2*vy/g
-                        flight_time = -2.0 * b.vy / GRAVITY 
-                        
-                        # 3. Pick Target Landing Spot
-                        # Z: BASELINE TARGET (approx +/- 8.5)
-                        # Table is +/- 9.0 long, so 8.5 is right at the edge
-                        target_z = 8.5 if player_id == 1 else -8.5
-                        
-                        # X: Left/Right based on where you hit the paddle
-                        hit_offset = (b.x - p.x) # -1.0 to 1.0 (approx)
-                        # Map offset to safe table width (-3.5 to 3.5)
-                        target_x = hit_offset * 4.0 
-                        # Clamp target X
-                        target_x = max(-3.8, min(3.8, target_x))
-                        
-                        # 4. Calculate Required Velocity
-                        # dist = v * t => v = dist / t
-                        dist_z = target_z - b.z
-                        dist_x = target_x - b.x
-                        
-                        # Direct calculation (No drag compensation needed)
-                        b.vz = (dist_z / flight_time)
-                        b.vx = (dist_x / flight_time)
-
-                        # Spin Logic
-                        b.spin_x = 0 
-                        b.spin_z = -hit_offset * 3.0 # Sharp curve
-                        b.spin_y = hit_offset * 4.0
-                        
-                        # Reset bounces
-                        b.bounces_side1 = 0
-                        b.bounces_side2 = 0
-                        b.last_hit_by = player_id
-                        
-                        # Sound
-                        if self.sound_gen: self.sound_gen.play('paddle_hit')
-                        self.spawn_particles(b.x, b.y, b.z, 12)
-                        
-                        # Cap speed to prevent physics glitching
-                        max_speed = 35.0
-                        if abs(b.vz) > max_speed: b.vz = max_speed if b.vz > 0 else -max_speed
-
-        # Scoring
-        if b.z > 15: self.score_point(1) # P2 missed, P1 scores
-        elif b.z < -15: self.score_point(2) 
-
-        # Out of bounds (Hit floor)
-        if b.y < -5:
-            if b.z > 0: self.score_point(1)
-            else: self.score_point(2)
-
-    def score_point(self, winner_idx):
-        if self.game_over: return
+    def check_collision(self, m, p):
+        # Circle-Circle Collision
+        dx = p.x - m.x
+        dz = p.z - m.z
+        dist = math.sqrt(dx*dx + dz*dz)
+        min_dist = PUCK_RADIUS + MALLET_RADIUS
         
-        # Winner idx is 1 or 2
-        self.score[winner_idx-1] += 1
-        
-        if self.sound_gen: self.sound_gen.play('score')
-        
-        # Game Over Check
-        s1, s2 = self.score
-        if (s1 >= POINTS_TO_WIN and s1 >= s2 + WIN_BY) or \
-           (s2 >= POINTS_TO_WIN and s2 >= s1 + WIN_BY):
-            self.game_over = True
-            self.winner_text = f"PLAYER {winner_idx} WINS!"
-        else:
-            self.serve_state = 'WAIT'
-            # Determine Server (2 serves each)
-            self.server = 1 if ((sum(self.score)//2)%2==0) else 2
-            self.ball.in_play = False 
-
-    def spawn_particles(self, x, y, z, n):
+        if dist < min_dist:
+            # Overlap!
+            
+            # 1. Resolve Position (Push Puck out)
+            overlap = min_dist - dist
+            nx = dx / dist # Normal
+            nz = dz / dist
+            
+            p.x += nx * overlap
+            p.z += nz * overlap
+            
+            # 2. Resolve Velocity (Elastic)
+            # Relative velocity
+            rvx = p.vx - m.vx
+            rvz = p.vz - m.vz
+            
+            # Velocity along normal
+            vel_along_normal = rvx * nx + rvz * nz
+            
+            # If moving apart, don't bounce
+            if(vel_along_normal > 0): return
+            
+            j = -(1 + RESTITUTION_PUCK) * vel_along_normal
+            # Assume equal mass for simplicity or infinite mass mallet
+            # Impulse scalar
+            
+            p.vx += j * nx
+            p.vz += j * nz
+            
+            # Add some mallet velocity transfer
+            p.vx += m.vx * 0.5
+            p.vz += m.vz * 0.5
+            
+            # Sound
+            if self.sound: self.sound.play('mallet_hit')
+            
+            # Particles
+            self.spawn_particles(p.x, p.y, p.z, 5, (1, 1, 0))
+            
+    def spawn_particles(self, x, y, z, n, col):
         for _ in range(n):
-            self.particles.append(Particle(x, y, z))
-
-    def update(self, dt):
-        # Update particles
+            self.particles.append(Particle(x, y, z, col))
+            
+    def update(self):
+        dt = self.clock.tick(60) / 1000.0
+        
+        if self.winner: return
+        
+        # AI Target
+        # AI targets puck if in his half (z > 0), else targets home (0, 6)
+        ai_target = (self.puck.x, self.puck.z)
+        if self.puck.z < 0: ai_target = (0, 5) # Defend center
+        
+        self.p1.update(dt)
+        self.p2.update(dt, ai_target)
+        
+        res = self.puck.update(dt)
+        if res == 'wall' and self.sound: self.sound.play('wall_hit')
+        
+        # Collisions
+        self.check_collision(self.p1, self.puck)
+        self.check_collision(self.p2, self.puck)
+        
+        # Goal Checks
+        if self.puck.z > TABLE_L:
+            self.goal(0) # P2 side (Top), P1 scores
+        elif self.puck.z < -TABLE_L:
+            self.goal(1) # P1 side (Bottom), P2 scores
+            
+        # Particles
         self.particles = [p for p in self.particles if p.life > 0]
         for p in self.particles: p.update(dt)
         
-        if self.game_over: return
-
-        # Serve State Machine
-        if self.serve_state == 'WAIT':
-            # Ball sticks to server paddle
-            server_z = -5 if self.server == 1 else 5
-            self.ball.x = 0
-            self.ball.y = 1.6 # Hold height
-            self.ball.z = server_z
-            self.ball.vx = self.ball.vy = self.ball.vz = 0
-            return
-            
-        elif self.serve_state == 'TOSS':
-            # Physics only for toss (Gravity)
-            self.ball.vy += GRAVITY * dt
-            self.ball.y += self.ball.vy * dt
-            
-            # Check for HIT moment (falling + height)
-            if self.ball.vy < 0 and self.ball.y < 1.8:
-                # STRIKE! (Auto-hit logic)
-                self.serve_state = 'PLAY'
-                self.ball.in_play = True
-                self.ball.reset(server=self.server) # Apply launch velocity
-                
-                # Visuals
-                if self.sound_gen: self.sound_gen.play('paddle_hit')
-                self.spawn_particles(self.ball.x, self.ball.y, self.ball.z, 15)
-            return
-
-        # Play State
-        self.ball.update(dt)
-        self.handle_collisions()
+    def goal(self, scorer_idx):
+        self.scores[scorer_idx] += 1
+        if self.sound: self.sound.play('goal') 
+        self.spawn_particles(self.puck.x, 2, self.puck.z, 20, (0, 1, 0))
         
-        if self.ai_enabled:
-            # AI always controls the OPPONENT of the human
-            self.ai.update(dt, self.ball)
+        if self.scores[scorer_idx] >= WIN_SCORE:
+            self.winner = f"PLAYER {scorer_idx+1} WINS!"
+        else:
+            self.puck.reset()
+            
+    def draw_world(self):
+        # Table Floor
+        glColor3f(0.9, 0.9, 0.95) # Ice White
+        glBegin(GL_QUADS)
+        glNormal3f(0, 1, 0)
+        glVertex3f(-TABLE_W, 0, -TABLE_L)
+        glVertex3f(TABLE_W, 0, -TABLE_L)
+        glVertex3f(TABLE_W, 0, TABLE_L)
+        glVertex3f(-TABLE_W, 0, TABLE_L)
+        glEnd()
+        
+        # Walls (Red)
+        glColor3f(0.8, 0.1, 0.1)
+        h = WALL_H
+        w = 0.2
+        # Left Wall
+        glPushMatrix(); glTranslatef(-TABLE_W-w/2, h/2, 0); glScalef(w, h, TABLE_L*2); self.box(); glPopMatrix()
+        # Right Wall
+        glPushMatrix(); glTranslatef(TABLE_W+w/2, h/2, 0); glScalef(w, h, TABLE_L*2); self.box(); glPopMatrix()
+        # Top Wall (Split for Goal)
+        # Left part
+        glPushMatrix(); glTranslatef(-TABLE_W/2 - GOAL_W/2, h/2, -TABLE_L-w/2); glScalef(TABLE_W - GOAL_W/2, h, w); self.box(); glPopMatrix()
+        # Right part
+        glPushMatrix(); glTranslatef(TABLE_W/2 + GOAL_W/2, h/2, -TABLE_L-w/2); glScalef(TABLE_W - GOAL_W/2, h, w); self.box(); glPopMatrix()
+        
+        # Bottom Wall (Split)
+        glPushMatrix(); glTranslatef(-TABLE_W/2 - GOAL_W/2, h/2, TABLE_L+w/2); glScalef(TABLE_W - GOAL_W/2, h, w); self.box(); glPopMatrix()
+        glPushMatrix(); glTranslatef(TABLE_W/2 + GOAL_W/2, h/2, TABLE_L+w/2); glScalef(TABLE_W - GOAL_W/2, h, w); self.box(); glPopMatrix()
+        
+        # Markings (Lines)
+        glDisable(GL_LIGHTING)
+        glColor3f(1, 0, 0) # Center Line
+        glLineWidth(3)
+        glBegin(GL_LINES)
+        glVertex3f(-TABLE_W, 0.05, 0); glVertex3f(TABLE_W, 0.05, 0)
+        glEnd()
+        
+        # Circle
+        glPushMatrix()
+        glTranslatef(0, 0.05, 0)
+        glRotatef(90, 1, 0, 0)
+        self.draw_circle(2.0)
+        glPopMatrix()
+        glEnable(GL_LIGHTING)
+
+    def draw_circle(self, r):
+        glBegin(GL_LINE_LOOP)
+        for i in range(32):
+            th = 2 * math.pi * i / 32
+            glVertex2f(r*math.cos(th), r*math.sin(th))
+        glEnd()
+
+    def box(self):
+        glutSolidCube(1.0) if 'glutSolidCube' in globals() else self.draw_cube_arrays()
+
+    def draw_cube_arrays(self):
+        glBegin(GL_QUADS)
+        # Top
+        glNormal3f(0,1,0); glVertex3f(-0.5, 0.5, 0.5); glVertex3f(0.5, 0.5, 0.5); glVertex3f(0.5, 0.5, -0.5); glVertex3f(-0.5, 0.5, -0.5)
+        # Front
+        glNormal3f(0,0,1); glVertex3f(-0.5, -0.5, 0.5); glVertex3f(0.5, -0.5, 0.5); glVertex3f(0.5, 0.5, 0.5); glVertex3f(-0.5, 0.5, 0.5)
+        # ... (Abbreviated, relying on glut mostly)
+        glEnd()
 
     def render(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
         
         # Camera
-        cam = CAMERA_ANGLES[self.cam_mode]
-        glTranslatef(*cam['pos'])
-        glRotatef(cam['rot'][0], 1, 0, 0)
-        glRotatef(cam['rot'][1], 0, 1, 0)
-        glRotatef(cam['rot'][2], 0, 0, 1)
+        glTranslatef(*CAM_OFFSET)
+        glRotatef(CAM_ROT[0], 1, 0, 0)
         
-        # Draw World
-        draw_stadium()
-        draw_table_mesh(self.quadric)
-        
+        self.draw_world()
         self.p1.draw(self.quadric)
         self.p2.draw(self.quadric)
-        self.ball.draw(self.quadric)
+        self.puck.draw(self.quadric)
         
         for p in self.particles: p.draw(self.quadric)
         
-        # 2D UI
         self.draw_ui()
         pygame.display.flip()
 
     def draw_ui(self):
-        # 2D Projection
         glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity()
         glOrtho(0, self.width, self.height, 0, -1, 1)
         glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity()
         glDisable(GL_LIGHTING); glDisable(GL_DEPTH_TEST)
         
-        # Text helper
-        def draw_text(txt, x, y, col=(255,255,255), center=False, font=self.font):
-            surf = font.render(txt, True, col)
-            data = pygame.image.tostring(surf, 'RGBA', True)
-            w, h = surf.get_size()
-            if center: x -= w//2
-            
-            glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            glRasterPos2i(int(x), int(y+h))
-            glDrawPixels(w, h, GL_RGBA, GL_UNSIGNED_BYTE, data)
-
-        # HUD
-        draw_text(f"{self.score[0]} - {self.score[1]}", self.width//2, 20, center=True)
+        # Scores
+        s = f"{self.scores[0]} : {self.scores[1]}"
+        surf = self.font.render(s, True, (0, 0, 0))
+        data = pygame.image.tostring(surf, 'RGBA', True)
+        w, h = surf.get_size()
         
-        mode_txt = f"YOU: P{self.player_side} | OPP: {'AI' if self.ai_enabled else 'HUMAN'}"
-        draw_text(mode_txt, self.width-200, 20, font=self.font_sm, col=(200,200,100))
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glRasterPos2i(self.width//2 - w//2, 50)
+        glDrawPixels(w, h, GL_RGBA, GL_UNSIGNED_BYTE, data)
         
-        # Controls
-        controls = "WASD OR Arrows: Move | SPACE: Serve | TAB: Switch Sides | I: Toggle AI"
-        draw_text(controls, 20, self.height - 40, font=self.font_sm, col=(150,150,150))
-        if self.serve_state == 'WAIT':
-             draw_text("PRESS SPACE TO SERVE", self.width//2, self.height//2 + 50, col=(255,255,0), center=True)
-             
-        if self.game_over:
-             draw_text(self.winner_text, self.width//2, self.height//2 - 50, col=(50,255,50), center=True)
-             draw_text("PRESS R TO RESET", self.width//2, self.height//2 + 10, font=self.font_sm, center=True)
+        if self.winner:
+            ws = self.font.render(self.winner, True, (50, 200, 50))
+            data = pygame.image.tostring(ws, 'RGBA', True)
+            w2, h2 = ws.get_size()
+            glRasterPos2i(self.width//2 - w2//2, self.height//2)
+            glDrawPixels(w2, h2, GL_RGBA, GL_UNSIGNED_BYTE, data)
 
         glEnable(GL_DEPTH_TEST); glEnable(GL_LIGHTING)
         glPopMatrix(); glMatrixMode(GL_PROJECTION); glPopMatrix(); glMatrixMode(GL_MODELVIEW)
 
     def run(self):
         while self.running:
-            dt = self.clock.tick(120) / 1000.0
-            
-            for event in pygame.event.get():
-                if event.type == QUIT: self.running = False
-                elif event.type == VIDEORESIZE: self.resize(event.w, event.h)
-                elif event.type == KEYDOWN:
-                    if event.key == K_ESCAPE: self.running = False
-                    elif event.key == K_r: self.reset_match()
-                    elif event.key == K_SPACE: 
-                        if self.serve_state == 'WAIT': 
-                            self.serve_state = 'TOSS'
-                            # Toss Up
-                            self.ball.vy = 8.0 # Visible toss
-                            if self.sound_gen: self.sound_gen.play('table_hit') # Use soft sound for toss catch
-                    elif event.key == K_c:
-                         idx = self.cam_keys.index(self.cam_mode)
-                         self.cam_mode = self.cam_keys[(idx+1)%len(self.cam_keys)]
-                    elif event.key == K_i: 
-                        self.ai_enabled = not self.ai_enabled
-                    elif event.key == K_TAB:
-                        # Switch Sides
-                        self.player_side = 2 if self.player_side == 1 else 1
-                        # Update AI to control the other paddle
-                        self.ai.paddle = self.p1 if self.player_side == 2 else self.p2
-                        # Switch Camera
-                        self.cam_mode = 'player2' if self.player_side == 2 else 'player1'
-            
-            # Input
-            keys = pygame.key.get_pressed()
-            
-            # Unified Inputs (Both Arrow and WASD work for active player)
-            move_left = keys[K_a] or keys[K_LEFT]
-            move_right = keys[K_d] or keys[K_RIGHT]
-            
-            # Local Multiplayer Override (If AI off, Arrows=P2, WASD=P1)
-            if not self.ai_enabled:
-                 move_left_p1 = keys[K_a]
-                 move_right_p1 = keys[K_d]
-                 move_left_p2 = keys[K_LEFT]
-                 move_right_p2 = keys[K_RIGHT]
-                 
-                 self.p1.move_horizontal(-1 if move_left_p1 else (1 if move_right_p1 else 0), dt)
-                 self.p2.move_horizontal(-1 if move_left_p2 else (1 if move_right_p2 else 0), dt)
-            else:
-                # Single Player (Active Side)
-                dx = -1 if move_left else (1 if move_right else 0)
-                
-                if self.player_side == 1:
-                    self.p1.move_horizontal(dx, dt)
-                else:
-                    self.p2.move_horizontal(dx, dt)
-
-            self.update(dt)
+            self.update()
             self.render()
-            
-        pygame.quit()
+            for e in pygame.event.get():
+                if e.type == QUIT: self.running = False
+                elif e.type == KEYDOWN and e.key == K_ESCAPE: self.running = False
+                elif e.type == KEYDOWN and e.key == K_r: self.start_game()
+                elif e.type == VIDEORESIZE: self.resize(e.w, e.h)
 
 if __name__ == "__main__":
-    Game().run()
+    g = Game()
+    g.run()

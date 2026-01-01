@@ -47,14 +47,17 @@ class SoundGenerator:
     def generate_sounds(self):
         if not self.enabled: return
         
-        # Paddle hit (higher pitch, sharp)
-        self.sounds['paddle_hit'] = self.generate_wave(0.1, 440, 200, volume=0.6)
+        # Mallet Hit (Sharp plastic 'tock')
+        self.sounds['mallet_hit'] = self.generate_wave(0.05, 800, 100, volume=0.8)
         
-        # Table bounce (lower pitch, duller)
-        self.sounds['table_hit'] = self.generate_wave(0.08, 200, 100, volume=0.4)
+        # Wall Hit (High click)
+        self.sounds['wall_hit'] = self.generate_wave(0.03, 1200, 800, volume=0.4)
         
-        # Score / Win (simple chord-like chirp)
-        self.sounds['score'] = self.generate_wave(0.3, 880, 440, volume=0.5)
+        # Goal Horn (Buzz)
+        self.sounds['goal'] = self.generate_wave(1.5, 150, 100, decay=False, volume=0.7)
+        
+        # Score point (Short beep)
+        self.sounds['score'] = self.generate_wave(0.2, 600, 900, volume=0.5)
 
     def play(self, name):
         if self.enabled and name in self.sounds:
